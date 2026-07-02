@@ -1,0 +1,10 @@
+# Pulsar worker image — safe to scale horizontally (docker compose --scale worker=N)
+FROM node:20-alpine AS base
+WORKDIR /app/worker
+COPY worker/package.json ./
+RUN npm install
+COPY worker ./
+COPY shared ../shared
+RUN npx prisma generate --schema ../database/schema.prisma || true
+RUN npm run build
+CMD ["npm", "run", "start"]

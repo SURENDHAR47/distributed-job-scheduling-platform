@@ -1,0 +1,191 @@
+openapi: 3.0.3
+info:
+  title: Pulsar API
+  description: REST API for the Pulsar distributed job scheduling platform.
+  version: 1.0.0
+servers:
+  - url: http://localhost:4000/api/v1
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details: {}
+    Job:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        queueId: { type: string, format: uuid }
+        name: { type: string }
+        type: { type: string, enum: [IMMEDIATE, DELAYED, SCHEDULED, RECURRING, BATCH] }
+        status: { type: string, enum: [QUEUED, SCHEDULED, CLAIMED, RUNNING, COMPLETED, FAILED, RETRYING, DEAD_LETTER, CANCELLED] }
+        payload: { type: object }
+        priority: { type: integer }
+        attempts: { type: integer }
+        maxAttempts: { type: integer }
+        runAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+  responses:
+    Unauthorized:
+      description: Missing or invalid JWT
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Forbidden:
+      description: Caller's role does not permit this action
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: Resource not found
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Validation:
+      description: Request failed schema validation
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+paths:
+  /auth/register:
+    post:
+      security: []
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties: { name: { type: string }, email: { type: string }, password: { type: string, minLength: 6 } }
+      responses:
+        "201": { description: Created }
+        "400": { $ref: "#/components/responses/Validation" }
+        "409": { description: Email already registered }
+  /auth/login:
+    post:
+      security: []
+      summary: Authenticate and receive access + refresh tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties: { email: { type: string }, password: { type: string } }
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /auth/refresh:
+    post:
+      security: []
+      summary: Exchange a refresh token for a new access token
+      responses: { "200": { description: OK }, "401": { $ref: "#/components/responses/Unauthorized" } }
+  /projects:
+    post:
+      summary: Create a project
+      responses: { "201": { description: Created }, "403": { $ref: "#/components/responses/Forbidden" } }
+    get:
+      summary: List projects for an organization
+      parameters:
+        - in: query
+          name: organizationId
+          schema: { type: string, format: uuid }
+      responses: { "200": { description: OK } }
+  /queues:
+    post:
+      summary: Create a queue
+      responses: { "201": { description: Created } }
+    get:
+      summary: List queues (optionally filtered by project)
+      parameters: [{ in: query, name: projectId, schema: { type: string, format: uuid } }]
+      responses: { "200": { description: OK } }
+  /queues/{id}:
+    put:
+      summary: Update queue configuration (priority, concurrency, retry policy)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string, format: uuid } }]
+      responses: { "200": { description: OK } }
+  /queues/{id}/pause:
+    post:
+      summary: Pause a queue (stops new claims; in-flight jobs finish)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string, format: uuid } }]
+      responses: { "200": { description: OK } }
+  /queues/{id}/resume:
+    post:
+      summary: Resume a paused queue
+      parameters: [{ in: path, name: id, required: true, schema: { type: string, format: uuid } }]
+      responses: { "200": { description: OK } }
+  /jobs:
+    post:
+      summary: Create a job (immediate, delayed, scheduled, recurring, or batch)
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: "#/components/schemas/Job" } } }
+      responses: { "201": { description: Created }, "400": { $ref: "#/components/responses/Validation" } }
+    get:
+      summary: List jobs with pagination, filtering and sorting
+      parameters:
+        - in: query
+          name: queueId
+          schema: { type: string, format: uuid }
+        - in: query
+          name: status
+          schema: { type: string }
+        - in: query
+          name: type
+          schema: { type: string }
+        - in: query
+          name: search
+          schema: { type: string }
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: pageSize
+          schema: { type: integer, default: 20 }
+        - in: query
+          name: sortBy
+          schema: { type: string, default: createdAt }
+        - in: query
+          name: sortDir
+          schema: { type: string, enum: [asc, desc] }
+      responses: { "200": { description: OK } }
+  /jobs/{id}:
+    get:
+      summary: Get job detail including execution history
+      parameters: [{ in: path, name: id, required: true, schema: { type: string, format: uuid } }]
+      responses: { "200": { description: OK }, "404": { $ref: "#/components/responses/NotFound" } }
+    delete:
+      summary: Delete a job (rejected if currently executing)
+      parameters: [{ in: path, name: id, required: true, schema: { type: string, format: uuid } }]
+      responses: { "204": { description: No Content }, "409": { description: Job is executing } }
+  /jobs/{id}/retry:
+    post:
+      summary: Manually retry a FAILED or DEAD_LETTER job
+      parameters: [{ in: path, name: id, required: true, schema: { type: string, format: uuid } }]
+      responses: { "200": { description: OK } }
+  /workers:
+    get:
+      summary: List worker fleet status and heartbeats
+      responses: { "200": { description: OK } }
+  /logs:
+    get:
+      summary: List execution logs with pagination and level filtering
+      parameters: [{ in: query, name: level, schema: { type: string, enum: [debug, info, warn, error] } }]
+      responses: { "200": { description: OK } }
+  /dead-letter-queue:
+    get:
+      summary: List jobs that exhausted retries
+      responses: { "200": { description: OK } }
+  /metrics:
+    get:
+      summary: Aggregate platform metrics (throughput, success rate, utilization…)
+      responses: { "200": { description: OK } }

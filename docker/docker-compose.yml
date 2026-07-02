@@ -1,0 +1,64 @@
+version: "3.9"
+
+# ============================================================================
+# Full-stack local orchestration: Postgres + API server + N worker replicas
+# + the React dashboard. Run with:  docker compose -f docker/docker-compose.yml up --build
+# ============================================================================
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pulsar
+      POSTGRES_PASSWORD: pulsar
+      POSTGRES_DB: pulsar
+    ports: ["5432:5432"]
+    volumes:
+      - pulsar_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pulsar"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrate:
+    build: { context: .., dockerfile: docker/Dockerfile.server }
+    command: sh -c "npx prisma migrate deploy --schema ../database/schema.prisma && npx tsx ../database/seed.ts"
+    environment:
+      DATABASE_URL: postgresql://pulsar:pulsar@postgres:5432/pulsar?schema=public
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  server:
+    build: { context: .., dockerfile: docker/Dockerfile.server }
+    command: npm run start
+    ports: ["4000:4000"]
+    environment:
+      DATABASE_URL: postgresql://pulsar:pulsar@postgres:5432/pulsar?schema=public
+      PORT: 4000
+      JWT_ACCESS_SECRET: prod-access-secret
+      JWT_REFRESH_SECRET: prod-refresh-secret
+      CORS_ORIGIN: http://localhost:5173
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  worker:
+    build: { context: .., dockerfile: docker/Dockerfile.worker }
+    command: npm run start
+    deploy:
+      replicas: 3
+    environment:
+      DATABASE_URL: postgresql://pulsar:pulsar@postgres:5432/pulsar?schema=public
+      WORKER_CONCURRENCY: 4
+      POLL_INTERVAL_MS: 1000
+      HEARTBEAT_INTERVAL_MS: 5000
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  client:
+    build: { context: .., dockerfile: docker/Dockerfile.client }
+    ports: ["5173:80"]
+    depends_on: [server]
+
+volumes:
+  pulsar_pgdata:
